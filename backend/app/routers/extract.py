@@ -210,88 +210,103 @@ async def _extract_single_file(
             # 用于追踪已找到值的字段 ID 集合
             filled_field_ids = set()
 
-            # --- 多轮提取 (Multi-Pass) 循环 ---
+            # --- 提取核心逻辑 (支持批次并发与分段并发) ---
+            async def process_chunk_v2(c_idx: int, c_text: str, p_idx: int):
+                """处理单分段中的所有批次 (并发执行批次)"""
+                if task_id in _terminated_tasks: return
+                
+                logger.info(f"Pass {p_idx+1} | Chunk {c_idx+1}/{len(chunks)} | Processing started...")
+                
+                # 收集该分段中所有待提取的批次
+                batch_tasks = []
+                batch_fields_map = []
+                
+                for bid, group_fields in field_groups.items():
+                    # 过滤已命中字段
+                    rem_fields = [f for f in group_fields if f["id"] not in filled_field_ids]
+                    if not rem_fields:
+                        continue
+                        
+                    batch_fields_map.append(rem_fields)
+                    batch_tasks.append(extract_grouped_fields(
+                        model_url=model_config["url"],
+                        api_key=model_config["api_key"],
+                        model_name=model_config["name"],
+                        temperature=model_config.get("temperature", 0.2),
+                        top_p=model_config.get("top_p", 0.8),
+                        text_content=c_text,
+                        fields=rem_fields,
+                    ))
+                
+                if not batch_tasks:
+                    return
+
+                # 【批次级并发】: 同一个分块的所有批次请求同时发出
+                all_results = await asyncio.gather(*batch_tasks)
+                
+                # 处理各组结果
+                for b_idx, results in enumerate(all_results):
+                    if task_id in _terminated_tasks: return
+                    active_fields = batch_fields_map[b_idx]
+                    
+                    for f in active_fields:
+                        fid = f["id"]
+                        res = results.get(fid)
+                        if not res or not isinstance(res, dict):
+                            continue
+
+                        val = str(res.get("value", "")).strip()
+                        src = str(res.get("source", "")).strip()
+                        
+                        if val or src:
+                            # 1. 定位 BBox
+                            matched_block = find_block_for_source(src, ocr_blocks) if ocr_blocks else None
+                            if not matched_block and is_pdf and file_bytes:
+                                matched_block = find_text_bbox_in_pdf_simple(file_bytes, src)
+
+                            bbox_data = None
+                            if matched_block:
+                                bbox_data = {
+                                    "bbox": matched_block["block_bbox"],
+                                    "page": matched_block.get("page", 0),
+                                    "page_width": matched_block.get("page_width"),
+                                    "page_height": matched_block.get("page_height")
+                                }
+
+                            # 2. 存入数据库
+                            supabase.table("extraction_results").upsert({
+                                "file_id": file_id,
+                                "field_id": fid,
+                                "user_id": f["user_id"],
+                                "value": val,
+                                "source": src,
+                                "bbox": bbox_data,
+                                "is_reviewed": False,
+                            }, on_conflict="file_id,field_id").execute()
+                            
+                            filled_field_ids.add(fid)
+
+            # --- 运行提取循环 ---
             for pass_idx in range(extraction_passes):
                 if task_id in _terminated_tasks: break
                 logger.info(f">>> Starting Extraction Pass {pass_idx + 1}/{extraction_passes} for {file_name}")
 
-                # 针对每个分段进行提取
-                for chunk_idx, chunk_text in enumerate(chunks):
+                # 【分段级并发控制】: 每组执行 2 个分段，兼顾性能与 token 节省
+                CHUNK_STEP = 2
+                for i in range(0, len(chunks), CHUNK_STEP):
                     if task_id in _terminated_tasks: break
-
-                    logger.info(f"Pass {pass_idx + 1} | Chunk {chunk_idx + 1}/{len(chunks)}...")
                     
-                    for bid, group_fields in field_groups.items():
-                        if task_id in _terminated_tasks: break
-                        
-                        # 【多轮核心逻辑】：过滤掉前几轮/前几个 chunk 已经填好的字段
-                        remaining_fields = [f for f in group_fields if f["id"] not in filled_field_ids]
-                        if not remaining_fields:
-                            continue
-
-                        # 批量提取当前组中尚未找到的字段
-                        logger.info(f"Pass {pass_idx + 1} | Chunk {chunk_idx + 1} | Extracting {len(remaining_fields)} fields: {[f['name'] for f in remaining_fields]}")
-                        
-                        results = await extract_grouped_fields(
-                            model_url=model_config["url"],
-                            api_key=model_config["api_key"],
-                            model_name=model_config["name"],
-                            temperature=model_config.get("temperature", 0.2),
-                            top_p=model_config.get("top_p", 0.8),
-                            text_content=chunk_text,
-                            fields=remaining_fields,
-                        )
-                        
-                        logger.info(f"LLM returned {len(results)} field entries")
-
-                        for f in remaining_fields:
-                            fid = f["id"]
-                            # 鲁棒获取结果
-                            res = results.get(fid)
-                            if not res or not isinstance(res, dict):
-                                continue
-
-                            val = str(res.get("value", "")).strip()
-                            src = str(res.get("source", "")).strip()
-                            
-                            # 只有当模型真正吐出了有效内容时才进行存储
-                            if val or src:
-                                logger.info(f"Match Found! Field: {f['name']} | Value: {val[:30]}")
-                                
-                                # 1. 寻找 BBox 等定位信息并加上全局偏移逻辑
-                                matched_block = find_block_for_source(src, ocr_blocks) if ocr_blocks else None
-                                if not matched_block and is_pdf and file_bytes:
-                                    matched_block = find_text_bbox_in_pdf_simple(file_bytes, src)
-
-                                bbox_data = None
-                                if matched_block:
-                                    bbox_data = {
-                                        "bbox": matched_block["block_bbox"],
-                                        "page": matched_block.get("page", 0),
-                                        "page_width": matched_block.get("page_width"),
-                                        "page_height": matched_block.get("page_height")
-                                    }
-
-                                # 2. 写入数据库
-                                supabase.table("extraction_results").upsert({
-                                    "file_id": file_id,
-                                    "field_id": fid,
-                                    "user_id": f["user_id"],
-                                    "value": val,
-                                    "source": src,
-                                    "bbox": bbox_data,
-                                    "is_reviewed": False,
-                                }, on_conflict="file_id,field_id").execute()
-                                
-                                # 3. 标记该字段已命中
-                                filled_field_ids.add(fid)
-                            else:
-                                # 日志记录未命中的字段，辅助调试
-                                logger.debug(f"Field {f['name']} not found in this chunk")
-
-                # 如果所有字段都已经命中，提前结束多轮提取
+                    chunk_group = chunks[i : i + CHUNK_STEP]
+                    tasks = [process_chunk_v2(i + idx, text, pass_idx) for idx, text in enumerate(chunk_group)]
+                    
+                    await asyncio.gather(*tasks)
+                    
+                    # 检查早期退出
+                    if len(filled_field_ids) == len(fields):
+                        logger.info(f"All fields found. Early exit at pass {pass_idx+1}, chunk group starting {i}.")
+                        break
+                
                 if len(filled_field_ids) == len(fields):
-                    logger.info(f"All fields found for {file_name} in Pass {pass_idx + 1}. Early exit.")
                     break
 
             # 更新文件状态 → extracted

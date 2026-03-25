@@ -176,6 +176,8 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
     const router = useRouter();
     const { id } = use(params);
 
+    const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
     const [task, setTask] = useState<Task | null>(null);
     const [files, setFiles] = useState<FileRecord[]>([]);
     const [promptSets, setPromptSets] = useState<PromptSet[]>([]);
@@ -377,7 +379,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
 
                     // 优先尝试从后端文本 API 获取内容（支持 pdf, docx, txt 等）
                     try {
-                        const tRes = await fetch(`http://localhost:8000/api/v1/preview/text/${file.id}`);
+                        const tRes = await fetch(`${API_BASE_URL}/api/v1/preview/text/${file.id}`);
                         if (tRes.ok) {
                             const tData = await tRes.json();
                             if (tData.text) setTextContent(tData.text);
@@ -385,9 +387,6 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                     } catch (e) {
                         console.error("fetch text API error", e);
                     }
-                } else {
-                    setSelectedFileUrl(null);
-                    lastLoadedFileIdRef.current = null;
                 }
             } catch (error) {
                 console.error("Failed to load file preview:", error);
@@ -399,7 +398,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
         };
 
         loadPreview();
-    }, [selectedFileId]);
+    }, [selectedFileId, API_BASE_URL, files, selectedFileUrl]);
 
     // 当选中词组发生变化时，加载该词组下的所有字段
     useEffect(() => {
@@ -506,7 +505,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
         setIsExtracting(true);
         stopPollingRef.current = false;
         try {
-            const res = await fetch('http://localhost:8000/api/v1/extract/start', {
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -573,7 +572,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
 
         setIsTerminating(true);
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/extract/terminate/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/terminate/${id}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -599,7 +598,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
 
     const loadExtractionResults = async (fileId: string) => {
         try {
-            const res = await fetch(`http://localhost:8000/api/v1/extract/results/${fileId}`);
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/results/${fileId}`);
             if (!res.ok) {
                 setExtractedValues({});
                 setExtractedSources({});
@@ -1033,7 +1032,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                             {/* eslint-disable-next-line @next/next/no-img-element */}
                                             <img
                                                 key={`${selectedFileId}-p${pdfPage}`}
-                                                src={`http://localhost:8000/api/v1/preview/pdf-page?file_path=${encodeURIComponent(selectedFile.path)}&page_num=${pdfPage}`}
+                                                src={`${API_BASE_URL}/api/v1/preview/pdf-page?file_path=${encodeURIComponent(selectedFile.path)}&page_num=${pdfPage}`}
                                                 alt={`PDF Page ${pdfPage + 1}`}
                                                 className="block w-full h-auto object-contain pointer-events-none"
                                                 onLoad={(e) => setImageDimensions({

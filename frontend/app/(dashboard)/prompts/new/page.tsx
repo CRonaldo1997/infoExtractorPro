@@ -243,8 +243,8 @@ export default function NewPromptSet() {
                   type="button"
                   onClick={() => setIsAdvanced(!isAdvanced)}
                   className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all ${isAdvanced
-                      ? 'bg-primary/10 text-primary'
-                      : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
                     }`}
                 >
                   <Settings2 className="w-4 h-4" />
@@ -335,7 +335,7 @@ export default function NewPromptSet() {
                   <div className="flex items-center gap-3">
                     <span className="text-2xl font-black text-indigo-400 opacity-30">#{bIdx + 1}</span>
                     <h3 className="text-lg font-bold text-slate-800">
-                      {batchId === 'default' ? '默认提取组' : `独立调用批次 ${bIdx + 1}`}
+                      批次 {bIdx + 1}
                       <span className="ml-3 text-xs font-medium text-slate-400 bg-slate-100 px-2 py-1 rounded-lg">
                         一次 LLM 请求内完成
                       </span>
