@@ -1,0 +1,33 @@
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/coverage/
+frontend/.env.local
+frontend/*.log
+frontend/dev_log.txt
+frontend/test_document.txt
+frontend/eslint-results.json
+
+# Backend
+backend/__pycache__/
+backend/.venv/
+backend/.env
+backend/.env.local
+backend/*.log
+backend/debug_*
+backend/test_*
+backend/check_*
+backend/trigger_*
+backend/fix_bboxes.py
+
+# Root
+langextract-main/
+test_*.py
+tmp/
+
+# General
+.DS_Store
+*.pyc
+.vscode/
+.idea/
+.gemini/
