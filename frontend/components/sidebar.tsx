@@ -61,11 +61,11 @@ export function Sidebar() {
 
   return (
     <aside className="w-64 flex-shrink-0 border-r border-slate-200 bg-white flex flex-col h-full">
-      <div className="p-6 flex items-center gap-3">
-        <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center text-white shadow-sm">
-          <Layers className="w-6 h-6" />
-        </div>
-        <h1 className="text-xl font-bold tracking-tight text-slate-900">InfoEx</h1>
+      <div className="p-6 pb-2 flex flex-col items-center gap-3 text-center">
+        <img src="/logo.png" alt="Company Logo" className="h-14 w-auto object-contain" />
+        <h1 className="text-xl font-black tracking-[0.15em] text-slate-800 leading-tight">
+          智能信息提取系统
+        </h1>
       </div>
 
       <nav className="flex-1 px-4 space-y-2 mt-4">
@@ -76,8 +76,8 @@ export function Sidebar() {
               key={item.name}
               href={item.href}
               className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-colors relative ${isActive
-                  ? 'text-primary font-semibold bg-primary/10'
-                  : 'text-slate-600 hover:bg-slate-100'
+                ? 'text-primary font-semibold bg-primary/10'
+                : 'text-slate-600 hover:bg-slate-100'
                 }`}
             >
               <item.icon className={`w-5 h-5 ${isActive ? 'text-primary' : 'text-slate-500'}`} />
@@ -93,6 +93,8 @@ export function Sidebar() {
             <img
               src={`https://api.dicebear.com/7.x/avataaars/svg?seed=${avatarSeed}`}
               alt={displayName}
+              crossOrigin="anonymous"
+              referrerPolicy="no-referrer"
               className="w-full h-full object-cover"
             />
           </div>

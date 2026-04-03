@@ -79,7 +79,7 @@ async def _poll_job(job_id: str) -> str:
 
 async def _parse_jsonl(jsonl_url: str) -> tuple[str, list[dict]]:
     """下载并解析 JSONL 结果，返回全文 + 块列表"""
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=180.0) as client:
         resp = await client.get(jsonl_url)
         resp.raise_for_status()
 
@@ -97,7 +97,21 @@ async def _parse_jsonl(jsonl_url: str) -> tuple[str, list[dict]]:
         except (json.JSONDecodeError, KeyError):
             continue
 
-        for layout in result.get("layoutParsingResults", []):
+        # 根据 PaddleOCR 不同版本的返回结构进行鲁棒性解析
+        result_data = result
+        
+        # 兼容两种常见的返回 key: layoutParsingResults (多页/多布局) 和 layoutParsingResult (单布局)
+        layouts = result_data.get("layoutParsingResults") or result_data.get("layoutParsingResult")
+        if not layouts and "markdown" in result_data:
+            # 如果 result 直接就是布局对象
+            layouts = [result_data]
+        elif not layouts:
+            # 尝试在更深层级寻找
+            layouts = []
+
+        for layout in (layouts if isinstance(layouts, list) else [layouts]):
+            if not layout: continue
+            
             # Markdown 文本（按 block_order 的流式文本）
             md_text = layout.get("markdown", {}).get("text", "")
             if md_text.strip():
@@ -113,7 +127,10 @@ async def _parse_jsonl(jsonl_url: str) -> tuple[str, list[dict]]:
                 page_h = layout['prunedResult'].get("height") or layout['prunedResult'].get("page_height")
 
             # 带 bbox 的块（用于源码匹配 + 高亮定位）
-            for block in layout.get("prunedResult", {}).get("parsing_res_list", []):
+            parsing_res = layout.get("prunedResult", {}) or layout.get("result", {})
+            parsing_list = parsing_res.get("parsing_res_list", []) if isinstance(parsing_res, dict) else []
+            
+            for block in parsing_list:
                 # 只收录正文块（block_order 不为 None）
                 all_blocks.append({
                     "page": page_num,
@@ -179,8 +196,8 @@ def find_block_for_source(source: str, blocks: list[dict]) -> Optional[dict]:
     if not source or not source.strip() or not blocks:
         return None
 
-    # 1. 预清洗：LLM 可能会在原文中加入多余的 \n 或空格
-    target = source.strip()
+    # 1. 预清洗：LLM 可能会在原文中加入多余的 \n 或空格，或者 case 不一致
+    target = "".join(source.split()).lower()
     
     # 2. 构建带索引映射的全局搜索文本 (Searchable Text Buffer)
     full_text_buffer = ""
@@ -193,7 +210,7 @@ def find_block_for_source(source: str, blocks: list[dict]) -> Optional[dict]:
             continue
         
         # 记录当前块在 buffer 中的起始位置
-        full_text_buffer += content + " " # 加空格做块分隔，防止词粘连
+        full_text_buffer += content # 不再加空格，保持紧凑匹配
         
         # 填充映射图，直到当前的 buffer 长度
         while len(char_to_block_map) < len(full_text_buffer):
@@ -204,25 +221,27 @@ def find_block_for_source(source: str, blocks: list[dict]) -> Optional[dict]:
 
     # 3. 滑动窗口模糊搜索 (Sliding Window Fuzzy Match)
     target_len = len(target)
-    # 首先尝试精确查找，提升速度
-    exact_idx = full_text_buffer.find(target)
+    # 首先尝试在“无空格”版本中精确查找，提升速度 (此时 buffer 也是全紧凑的)
+    full_text_lower = full_text_buffer.lower()
+    exact_idx = full_text_lower.find(target)
     best_start, best_end, best_ratio = -1, -1, 0.0
     
     if exact_idx != -1:
         best_start, best_end, best_ratio = exact_idx, exact_idx + target_len, 1.0
     else:
         # 进阶模糊查找 (基于 difflib.SequenceMatcher)
+        # 注意：这里 seq1 是 target，seq2 后续在循环中 set_seq2
         s_matcher = difflib.SequenceMatcher(None, target)
         
-        # 性能优化：限制搜索步长和窗口。对极长文本，增加步长。
+        # 性能优化：限制搜索步长。对极长文本，增加步长。
+        # 由于去掉了 buffer 中的空格，索引位置会更密集。
         step = 1 if target_len < 50 else 2
         
-        # 我们寻找最佳匹配的子串长度可能与 target 不一致
-        # 滑动寻找相似度最高的子串
-        for i in range(0, len(full_text_buffer) - target_len + 1, step):
-            # 允许 10% 的长度波动
-            sub_len = target_len
-            sub = full_text_buffer[i : i + sub_len]
+        # 我们寻找最佳匹配的子串长度可能与 target 不一致（OCR 处理时可能有漏字多字）
+        # 滑动窗口尝试 0.9x ~ 1.1x 的长度
+        for i in range(0, len(full_text_lower) - target_len + 1, step):
+            sub_len = target_len # 这里保持 target_len 即可，因为 buffer 已经压缩
+            sub = full_text_lower[i : i + sub_len]
             
             s_matcher.set_seq2(sub)
             ratio = s_matcher.ratio()
@@ -261,7 +280,11 @@ def find_block_for_source(source: str, blocks: list[dict]) -> Optional[dict]:
 
     return None
 
-def find_text_bbox_in_pdf_simple(file_bytes: bytes, source: str) -> Optional[dict]:
+async def find_text_bbox_in_pdf_simple(file_bytes: bytes, source: str) -> Optional[dict]:
+    import asyncio
+    return await asyncio.to_thread(_find_text_bbox_in_pdf_simple_sync, file_bytes, source)
+
+def _find_text_bbox_in_pdf_simple_sync(file_bytes: bytes, source: str) -> Optional[dict]:
     """
     针对可编辑 PDF，使用 PyMuPDF 获取文字块并进行模糊匹配。
     这比 search_for 更能处理 PDF 中的异常空格/换行。

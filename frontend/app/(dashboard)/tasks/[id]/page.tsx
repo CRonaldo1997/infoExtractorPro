@@ -1,7 +1,7 @@
 'use client';
 
 import { Header } from '@/components/header';
-import { use, useEffect, useState, useRef, useCallback } from 'react';
+import { use, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, File, CheckCircle2, AlertCircle, Clock, ChevronLeft, ChevronRight, ChevronDown, Folder, FolderOpen, PlayCircle, Eye, Settings2, Trash2, Copy, Check, Download, Edit3, BookOpen, Search, X, MapPin, Info, ChevronUp, FileText, XCircle, ZoomOut, ZoomIn } from 'lucide-react';
 import { taskService, Task } from '@/lib/services/tasks';
@@ -55,10 +55,19 @@ const getAllFileIds = (node: TreeNode): string[] => {
 // 文件状态指示器组件
 const FileStatusDot = ({ status }: { status?: string }) => {
     if (!status || status === 'uploaded') return null;
+    
+    // 正在处理状态使用转圈图标
+    if (status === 'extracting' || status === 'uploading') {
+        const title = status === 'extracting' ? '提取中' : '上传中';
+        return (
+            <span title={title} className="shrink-0 flex items-center">
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+            </span>
+        );
+    }
+
     const map: Record<string, { cls: string; title: string }> = {
-        uploading: { cls: 'bg-blue-400 animate-pulse', title: '上传中' },
         upload_failed: { cls: 'bg-red-400', title: '上传失败' },
-        extracting: { cls: 'bg-amber-400 animate-pulse', title: '提取中' },
         extracted: { cls: 'bg-green-400', title: '提取完成' },
         extract_failed: { cls: 'bg-red-400', title: '提取失败' },
     };
@@ -215,30 +224,108 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
 
     const [activeBbox, setActiveBbox] = useState<any>(null); // { bbox: number[], page?: number, width?: number, height?: number }
     const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+    const filesRef = useRef<FileRecord[]>(files);
+    
+    useEffect(() => {
+        filesRef.current = files;
+    }, [files]);
+    
     const imageScrollRef = useRef<HTMLDivElement>(null);
     const lastLoadedFileIdRef = useRef<string | null>(null);
     const [pdfPage, setPdfPage] = useState(0);
+    const [pdfTotalPages, setPdfTotalPages] = useState(0);
     const [zoom, setZoom] = useState(80);
     const [activeFieldId, setActiveFieldId] = useState<string | null>(null);
     const [previewMode, setPreviewMode] = useState<'visual' | 'text'>('visual');
+    const focusValueRef = useRef<string>('');
 
     const isTxtFile = !!(selectedFile && (selectedFile.name.toLowerCase().endsWith('.txt') || selectedFile.mime_type === 'text/plain'));
 
-    const highlightText = useCallback((text: string, term: string) => {
-        if (!term.trim()) return [<span key="all">{text}</span>];
-        const parts = text.split(new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
-        let matchCount = 0;
-        return parts.map((part, i) =>
-            part.toLowerCase() === term.toLowerCase()
-                ? <mark key={i} data-match-index={matchCount++} className="bg-amber-300/80 text-slate-900 rounded-sm px-0.5">{part}</mark>
-                : <span key={i}>{part}</span>
-        );
+    // 增强型模糊搜索正则生成器
+    const generateFuzzyRegex = useCallback((term: string) => {
+        if (!term || !term.trim()) return null;
+        
+        // 1. 极简清理：去掉搜索词自身的换行/空格。我们将会在所有字符间插入 \s*
+        // 这样 "Apple ID" 将匹配 "Apple ID", "Apple\nID", "AppleID", "A p p l e I D" 等
+        const cleanTerm = term.trim().replace(/\s+/g, '');
+        if (!cleanTerm) return null;
+
+        const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        // 2. 映射表：全角/半角、中英文标点、特殊符号互认
+        const symbolMap: Record<string, string> = {
+            ',': '[，,]', '，': '[，,]',
+            '.': '[。\\.]', '。': '[。\\.]',
+            ':': '[：:]', '：': '[：:]',
+            ';': '[；;]', '；': '[；;]',
+            '!': '[！!]', '！': '[！!]',
+            '?': '[？?]', '？': '[？?]',
+            '(': '[（\\(]', '（': '[（\\(]',
+            ')': '[）\\)]', '）': '[）\\)]',
+            '"': '[“”"]', '“': '[“”"]', '”': '[“”"]',
+            "'": "[‘’']", '‘': "[‘’']", '’': "[‘’']",
+            '[': '[\\[\u3010]', '【': '[\\[\u3010]',
+            ']': '[\\]\u3011]', '】': '[\\]\u3011]',
+            '{': '[\\{\u3008]', '《': '[\\{\u3008]',
+            '}': '[\\}\u3009]', '》': '[\\}\u3009]',
+            '/': '[/／]', '／': '[/／]',
+            '-': '[\\-—\u2013\u2014]', '—': '[\\-—\u2013\u2014]'
+        };
+
+        const regexParts = Array.from(cleanTerm).map(c => {
+            const escaped = escape(c);
+            if (symbolMap[c]) return symbolMap[c];
+            
+            // 数字全半角兼容 (0-9 -> ０-９)
+            if (/[0-9]/.test(c)) {
+                const fullWidth = String.fromCharCode(c.charCodeAt(0) + 65248);
+                return `[${c}${fullWidth}]`;
+            }
+            // 字母大小写 & 全半角兼容 (A-Z -> ａｚ)
+            if (/[a-zA-Z]/.test(c)) {
+                const low = c.toLowerCase();
+                const up = c.toUpperCase();
+                const lowFull = String.fromCharCode(low.charCodeAt(0) + 65248);
+                const upFull = String.fromCharCode(up.charCodeAt(0) + 65248);
+                return `[${low}${up}${lowFull}${upFull}]`;
+            }
+            return escaped;
+        });
+
+        // 3. 核心：在每两个字符间插入 [\\s\\n\\r]*，允许任意空白/换行分隔
+        return regexParts.join('[\\s\\n\\r]*');
     }, []);
 
+    const highlightText = useCallback((text: string, term: string) => {
+        const fuzzyPattern = generateFuzzyRegex(term);
+        if (!fuzzyPattern) return [<span key="all">{text}</span>];
+        
+        // 【生产保护】：文本超过 50 万字符时跳过正则 Split（防止浏览器主线程卡死）
+        if (text.length > 500000) return [<span key="all">{text}</span>];
+        
+        try {
+            const parts = text.split(new RegExp(`(${fuzzyPattern})`, 'gi'));
+            let currentMatchIdx = 0;
+            return parts.map((part, i) =>
+                (i % 2 === 1)
+                    ? <mark key={i} data-match-index={currentMatchIdx++} className="bg-amber-300/80 text-slate-900 rounded-sm px-0.5">{part}</mark>
+                    : <span key={i}>{part}</span>
+            );
+        } catch (e) {
+            console.error("Highlight regex error:", e);
+            return [<span key="all">{text}</span>];
+        }
+    }, [generateFuzzyRegex]);
+
     // 计算当前文本中的匹配总数
-    const matchCount = searchTerm && textContent
-        ? (textContent.match(new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi')) || []).length
-        : 0;
+    const matchCount = useMemo(() => {
+        if (!searchTerm || !textContent) return 0;
+        const pattern = generateFuzzyRegex(searchTerm);
+        if (!pattern) return 0;
+        try {
+            return (textContent.match(new RegExp(pattern, 'gi')) || []).length;
+        } catch { return 0; }
+    }, [searchTerm, textContent, generateFuzzyRegex]);
 
     const navigateMatch = (direction: 'next' | 'prev') => {
         if (matchCount === 0) return;
@@ -327,21 +414,36 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
             const [taskData, filesData, promptSetsData] = await Promise.all([
                 taskService.getTaskById(id),
                 fileService.getFilesByTaskId(id),
-                promptService.getPromptSets()
+                promptService.getPromptSets(true) // 只加载每个词组家族的最新版本
             ]);
             setTask(taskData);
             setFiles(filesData);
             setPromptSets(promptSetsData);
 
+            if (filesData.some(f => f.status === 'extracting')) {
+                setIsExtracting(true);
+                stopPollingRef.current = false;
+            }
+
             if (filesData.length > 0) {
                 setSelectedFileId(filesData[0].id);
             }
 
-            // 自动选中上次使用的词组，或者默认词组
+            // 自动选中上次使用的词组家族的最新版，或者默认词组的最新版
             const lastUsedId = taskData.prompt_set_id;
-            const targetSet = (lastUsedId && promptSetsData.find(p => p.id === lastUsedId)) ||
-                promptSetsData.find(p => p.is_default) ||
-                promptSetsData[0];
+            const lastUsedSetInList = promptSetsData.find(p => p.id === lastUsedId);
+            
+            // 如果在最新列表中找不到该 ID，说明该 ID 是旧版本，我们需要通过 parent_id 找回它的家族最新版
+            let targetSet = lastUsedSetInList;
+            if (!targetSet && lastUsedId) {
+                // 这里可能需要一个额外的 fetch 拿到旧版详情来获取 parent_id，但考虑到场景，
+                // 我们直接尝试找有没有任何一个 prompt set 的 parent_id 是该 ID 或者有相同的 parent_id
+                targetSet = promptSetsData.find(p => p.id === lastUsedId || (p.parent_id && p.parent_id === lastUsedId));
+            }
+
+            if (!targetSet) {
+                targetSet = promptSetsData.find(p => p.is_default) || promptSetsData[0];
+            }
 
             if (targetSet) {
                 setSelectedPromptSetId(targetSet.id);
@@ -367,38 +469,118 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                 return;
             }
 
+            const file = files.find(f => f.id === selectedFileId);
+            if (!file) return;
+
+            // 如果文件支持可视化预览 (图片、PDF、Word/Excel等)，优先加载 URL 并尽快关闭全局 Loading 蒙层
+            const isVisual = file.mime_type?.startsWith('image/') || 
+                            file.name.toLowerCase().endsWith('.pdf') || 
+                            file.mime_type === 'application/pdf' ||
+                            file.name.toLowerCase().endsWith('.docx') ||
+                            file.name.toLowerCase().endsWith('.doc') ||
+                            file.name.toLowerCase().endsWith('.xlsx');
+
+            // 仅对不支持可视化预览的文件 (主要是 .txt) 保持较长时间的全局 Loading 蒙层
+            const isTextOnly = file.name.toLowerCase().endsWith('.txt') || file.mime_type === 'text/plain';
+
             setIsPreviewLoading(true);
             setTextContent(null);
             setPdfPage(0); // 切换文件时重置页码
-            try {
-                const file = files.find(f => f.id === selectedFileId);
-                if (file) {
-                    const url = await fileService.getFileUrl(file.path);
-                    setSelectedFileUrl(url);
-                    lastLoadedFileIdRef.current = selectedFileId;
+            setPdfTotalPages(0);
 
-                    // 优先尝试从后端文本 API 获取内容（支持 pdf, docx, txt 等）
-                    try {
-                        const tRes = await fetch(`${API_BASE_URL}/api/v1/preview/text/${file.id}`);
-                        if (tRes.ok) {
-                            const tData = await tRes.json();
-                            if (tData.text) setTextContent(tData.text);
-                        }
-                    } catch (e) {
-                        console.error("fetch text API error", e);
+            try {
+                // 1. 快速获取签名链接
+                const url = await fileService.getFileUrl(file.path);
+                setSelectedFileUrl(url);
+                lastLoadedFileIdRef.current = selectedFileId;
+
+                // 2. 如果是可视化文件，拿到 URL 后其实已经可以显示了，不需要等下面的文本接口
+                if (isVisual) {
+                    setIsPreviewLoading(false);
+                }
+
+                // 如果是 PDF，异步获取总页数
+                const isPdf = file.mime_type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+                if (isPdf && file.path) {
+                    fetch(`${API_BASE_URL}/api/v1/preview/pdf-page-count?file_path=${encodeURIComponent(file.path)}`, {
+                        credentials: 'omit'
+                    })
+                        .then(r => r.json())
+                        .then(d => { if (d.page_count) setPdfTotalPages(d.page_count); })
+                        .catch(() => {});
+                }
+
+                // 3. 异步获取后端文本解析内容（用于溯源和搜索）
+                try {
+                    const tRes = await fetch(`${API_BASE_URL}/api/v1/preview/text/${encodeURIComponent(file.id)}`, {
+                        credentials: 'omit'
+                    });
+                    if (tRes.ok) {
+                        const tData = await tRes.json();
+                        if (tData.text) setTextContent(tData.text);
                     }
+                } catch (e) {
+                    console.error("fetch text API error", e);
                 }
             } catch (error) {
                 console.error("Failed to load file preview:", error);
                 setSelectedFileUrl(null);
                 lastLoadedFileIdRef.current = null;
             } finally {
+                // 确保所有文件最终都关闭 Loading
                 setIsPreviewLoading(false);
             }
         };
 
         loadPreview();
     }, [selectedFileId, API_BASE_URL, files, selectedFileUrl]);
+
+    // 全局提取状态轮询控制，防止离开页面或者超时导致状态停滞
+    useEffect(() => {
+        let pollInterval: NodeJS.Timeout;
+
+        if (isExtracting && !stopPollingRef.current) {
+            pollInterval = setInterval(async () => {
+                if (stopPollingRef.current) {
+                    clearInterval(pollInterval);
+                    setIsExtracting(false);
+                    return;
+                }
+                try {
+                    const { fileService } = await import('@/lib/services/files');
+                    const updatedFiles = await fileService.getFilesByTaskId(id);
+                    
+                    // 只要处于提取状态，就同步文件列表数据，确保 UI 上的加载动画和状态点实时刷新
+                    setFiles(updatedFiles);
+
+                    const stillProcessing = updatedFiles.some(f => f.status === 'extracting' || f.status === 'uploading');
+                    if (!stillProcessing) {
+                        clearInterval(pollInterval);
+                        setIsExtracting(false);
+                        toast.success('所有文件后台提取已处理完成！');
+                        
+                        // 延迟 1.5 秒再拉取最后的任务状态，给后端 background_tasks 的 aggregation 留出数据库写入时间
+                        setTimeout(async () => {
+                            try {
+                                const { taskService } = await import('@/lib/services/tasks');
+                                const latestTask = await taskService.getTaskById(id);
+                                if (latestTask) setTask(latestTask);
+                                if (selectedFileId) loadExtractionResults(selectedFileId);
+                                
+                                // 最后再拉排一把文件，确保所有状态都是最终版
+                                const finalFiles = await fileService.getFilesByTaskId(id);
+                                setFiles(finalFiles);
+                            } catch (e) { console.error('Final task sync failed', e); }
+                        }, 1500);
+                    }
+                } catch { /* 忽略网络/拉取报错 */ }
+            }, 3000);
+        }
+
+        return () => {
+            if (pollInterval) clearInterval(pollInterval);
+        };
+    }, [isExtracting, id]); // 移除了 files 和 selectedFileId 依赖，防止由于文件状态变更或者点击动作导致的轮询定时器被频繁重置而无法生效！
 
     // 当选中词组发生变化时，加载该词组下的所有字段
     useEffect(() => {
@@ -425,21 +607,87 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
         });
     };
 
-    const handleExportCsv = () => {
-        if (promptFields.length === 0) return;
-        const headers = ['文件名', ...promptFields.map(f => f.name)];
-        const row = [
-            selectedFile?.name || '',
-            ...promptFields.map(f => `"${(extractedValues[f.id] || '').replace(/"/g, '""')}"`),
-        ];
-        const csv = '\uFEFF' + headers.join(',') + '\n' + row.join(',');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${selectedFile?.name || 'export'}_提取结果.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+    const [isExportingCsv, setIsExportingCsv] = useState(false);
+
+    const handleExportCsv = async () => {
+        if (promptFields.length === 0) {
+            toast.error('当前词组没有字段，无法导出');
+            return;
+        }
+
+        // 确定要导出的文件：有勾选则只导出勾选的，否则导出全部
+        const targetFiles = checkedFileIds.size > 0
+            ? files.filter(f => checkedFileIds.has(f.id))
+            : files;
+
+        if (targetFiles.length === 0) {
+            toast.error('没有可导出的文件');
+            return;
+        }
+
+        setIsExportingCsv(true);
+        toast.info(`正在导出 ${targetFiles.length} 个文件的结果...`, { id: 'csv-export', duration: 10000 });
+
+        try {
+            // 构建 CSV 表头：文件名, 提取类型, [各字段名...]
+            const csvCell = (v: string) => `"${(v || '').replace(/"/g, '""')}"`;
+            const headers = ['文件名', '提取类型', ...promptFields.map(f => f.name)];
+            const rows: string[][] = [];
+
+            for (const file of targetFiles) {
+                // 拉取该文件的提取结果（含 llm_value）
+                let resultsMap: Record<string, { value: string; llm_value: string }> = {};
+                try {
+                    const res = await fetch(`${API_BASE_URL}/api/v1/extract/results/${encodeURIComponent(file.id)}`, {
+                        credentials: 'omit'
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        (data.results || []).forEach((r: any) => {
+                            if (r.field_id) {
+                                resultsMap[r.field_id] = {
+                                    value: r.value || '',
+                                    llm_value: r.llm_value || r.value || '',
+                                };
+                            }
+                        });
+                    }
+                } catch { /* 忽略单文件拉取失败 */ }
+
+                // LLM 提取行
+                const llmRow: string[] = [
+                    csvCell(file.name),
+                    csvCell('LLM提取'),
+                    ...promptFields.map(f => csvCell(resultsMap[f.id]?.llm_value || '')),
+                ];
+
+                // 人工修改行（current value，即界面展示值）
+                const humanRow: string[] = [
+                    csvCell(file.name),
+                    csvCell('人工修改'),
+                    ...promptFields.map(f => csvCell(resultsMap[f.id]?.value || '')),
+                ];
+
+                rows.push(llmRow);
+                rows.push(humanRow);
+            }
+
+            const csvContent = '\uFEFF' + headers.join(',') + '\n'
+                + rows.map(r => r.join(',')).join('\n');
+
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `提取结果_${targetFiles.length}个文件_${new Date().toISOString().slice(0, 10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast.success(`成功导出 ${targetFiles.length} 个文件的提取结果`, { id: 'csv-export' });
+        } catch (e: any) {
+            toast.error('导出失败: ' + e.message, { id: 'csv-export' });
+        } finally {
+            setIsExportingCsv(false);
+        }
     };
 
     const handleCheckChange = (fileIds: string[], checked: boolean) => {
@@ -508,6 +756,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
             const res = await fetch(`${API_BASE_URL}/api/v1/extract/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: 'omit',
                 body: JSON.stringify({
                     task_id: id,
                     file_ids: checkedFileIds.size > 0 ? Array.from(checkedFileIds) : [],
@@ -524,46 +773,42 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
             const data = await res.json();
             toast.success(data.message || `提取指令已下发！共 ${data.queued_file_count} 个文件`);
             setCheckedFileIds(new Set());
+            // Optimistically update task status as well
+            setTask(prev => prev ? { ...prev, status: 'extracting' } : null);
 
-            // 进入轮询模式：每3秒检查一次文件状态，直到所有目标文件完成
-            const targetFileIds = targetFiles.map(f => f.id);
-            const pollInterval = setInterval(async () => {
-                // 如果前端主动终止，则清理轮询
-                if (stopPollingRef.current) {
-                    clearInterval(pollInterval);
-                    setIsExtracting(false);
-                    return;
-                }
+            // Optimistically update file statuses and clear results
+            const targetFileIdsSet = new Set(targetFiles.map(f => f.id));
+            setFiles(prev => prev.map(f => targetFileIdsSet.has(f.id) ? { ...f, status: 'extracting' } : f));
+            if (selectedFileId && targetFileIdsSet.has(selectedFileId)) {
+                setExtractedValues({});
+                setExtractedSources({});
+                setExtractedBboxes({});
+                setActiveHighlight(null);
+                setSearchTerm('');
+            }
 
-                try {
-                    const { fileService } = await import('@/lib/services/files');
-                    const updatedFiles = await fileService.getFilesByTaskId(id);
-                    setFiles(updatedFiles);
-
-                    const allDone = targetFileIds.every(fid => {
-                        const f = updatedFiles.find(uf => uf.id === fid);
-                        return f && (f.status === 'extracted' || f.status === 'extract_failed');
-                    });
-
-                    if (allDone) {
-                        clearInterval(pollInterval);
-                        setIsExtracting(false);
-                        toast.success('所有文件提取已完成！');
-                        // 自动加载当前选中文件的提取结果
-                        if (selectedFileId) loadExtractionResults(selectedFileId);
-                    }
-                } catch { /* ignore poll errors */ }
-            }, 3000);
-
-            // 最多轮询 5 分钟后停止
-            setTimeout(() => {
-                clearInterval(pollInterval);
-                setIsExtracting(false);
-            }, 5 * 60 * 1000);
-
+            // 我们已经将轮询提取状态通过 isExtracting 委托给全局的 useEffect 监听去做了
+            // 不需要再这里 setInterval，也不需要 5 分钟硬性超时机制了！
         } catch (error: any) {
             toast.error('提取失败: ' + error.message);
             setIsExtracting(false);
+        }
+    };
+
+    const handleSaveManualEdit = async (fieldId: string, newValue: string) => {
+        if (!selectedFileId) return;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/results/${encodeURIComponent(selectedFileId)}/${encodeURIComponent(fieldId)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'omit',
+                body: JSON.stringify({ value: newValue })
+            });
+            if (!res.ok) throw new Error('保存修改失败');
+            toast.success('人工修改已自动保存', { duration: 1500, id: 'save-success' });
+        } catch(e) {
+            console.error(e);
+            toast.error('人工修改保存失败');
         }
     };
 
@@ -571,16 +816,27 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
         if (!confirm('确定要终止当前的批量提取任务吗？已发出的请求将尝试撤回。')) return;
 
         setIsTerminating(true);
+        const supabaseUser = await import('@/lib/supabase/client').then(m => m.createClient()).then(c => c.auth.getUser());
+        const userId = supabaseUser.data.user?.id;
+        if (!userId) {
+            toast.error('用户未登录');
+            setIsTerminating(false);
+            return;
+        }
+
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/extract/terminate/${id}`, {
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/terminate/${encodeURIComponent(id)}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
-                }
+                },
+                body: JSON.stringify({ user_id: userId }),
+                credentials: 'omit',
+                mode: 'cors'
             });
             if (!res.ok) {
                 const error = await res.json().catch(() => ({}));
-                throw new Error(error.message || '终止指令下发失败');
+                throw new Error(error.detail || error.message || '终止指令下发失败');
             }
 
             toast.success('终止请求已发送');
@@ -598,7 +854,9 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
 
     const loadExtractionResults = async (fileId: string) => {
         try {
-            const res = await fetch(`${API_BASE_URL}/api/v1/extract/results/${fileId}`);
+            const res = await fetch(`${API_BASE_URL}/api/v1/extract/results/${encodeURIComponent(fileId)}`, {
+                credentials: 'omit'
+            });
             if (!res.ok) {
                 setExtractedValues({});
                 setExtractedSources({});
@@ -626,6 +884,11 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
             setExtractedValues(newValues);
             setExtractedSources(newSources);
             setExtractedBboxes(newBboxes);
+
+            // 如果后端确认该文件已经不在提取状态，但本地由于缓存没更新，则强制更新本地状态，取消转圈
+            if (data.file_status && data.file_status !== 'extracting') {
+                setFiles(prev => prev.map(f => f.id === fileId && f.status === 'extracting' ? { ...f, status: data.file_status } : f));
+            }
         } catch (error) {
             console.error("Failed to load extraction results:", error);
             setExtractedValues({});
@@ -890,7 +1153,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                             </div>
                         ) : selectedFileUrl && selectedFile ? (
                             <>
-                                {selectedFile.mime_type?.startsWith('image/') ? (
+                                {previewMode === 'visual' && selectedFile.mime_type?.startsWith('image/') ? (
                                     <div ref={imageScrollRef} className="flex-1 w-full relative overflow-auto bg-slate-100/50 p-4">
                                         <div className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border border-slate-200/60 rounded-full px-4 py-2 shadow-xl shadow-slate-200/50 flex items-center gap-6 animate-in fade-in slide-in-from-top-4 duration-500">
                                             <div className="flex items-center gap-1.5 border-r border-slate-100 pr-4 mr-2">
@@ -945,6 +1208,8 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                             <img
                                                 src={selectedFileUrl}
                                                 alt={selectedFile.name}
+                                                crossOrigin="anonymous"
+                                                referrerPolicy="no-referrer"
                                                 className="block max-w-full h-auto w-full object-contain"
                                                 onLoad={(e) => setImageDimensions({
                                                     width: e.currentTarget.naturalWidth,
@@ -964,22 +1229,24 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                             )}
                                         </div>
                                     </div>
-                                ) : (selectedFile.mime_type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) ? (
+                                ) : previewMode === 'visual' && (selectedFile.mime_type === 'application/pdf' || selectedFile.name.toLowerCase().endsWith('.pdf')) ? (
                                     <div ref={imageScrollRef} className="flex-1 w-full relative overflow-auto bg-slate-100/50 flex flex-col items-center gap-4 p-4 scroll-smooth">
                                         <div className="sticky top-0 z-20 bg-white/90 backdrop-blur-md border border-slate-200/60 rounded-full px-4 py-2 shadow-xl shadow-slate-200/50 flex items-center gap-8 animate-in fade-in slide-in-from-top-4 duration-500">
                                             <div className="flex items-center gap-3 border-r border-slate-100 pr-6 mr-2">
                                                 <button
                                                     onClick={() => setPdfPage(p => Math.max(0, p - 1))}
-                                                    className="p-1.5 hover:bg-slate-100/80 rounded-lg transition-all active:scale-95 text-slate-500 hover:text-primary"
+                                                    disabled={pdfPage <= 0}
+                                                    className="p-1.5 hover:bg-slate-100/80 rounded-lg transition-all active:scale-95 text-slate-500 hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                                 >
                                                     <ChevronLeft className="w-5 h-5" />
                                                 </button>
                                                 <span className="text-sm font-black text-slate-700 min-w-[70px] text-center tabular-nums tracking-tighter">
-                                                    PAGE {pdfPage + 1}
+                                                    {pdfPage + 1}{pdfTotalPages > 0 ? `/${pdfTotalPages}` : ''}
                                                 </span>
                                                 <button
                                                     onClick={() => setPdfPage(p => p + 1)}
-                                                    className="p-1.5 hover:bg-slate-100/80 rounded-lg transition-all active:scale-95 text-slate-500 hover:text-primary"
+                                                    disabled={pdfTotalPages > 0 && pdfPage >= pdfTotalPages - 1}
+                                                    className="p-1.5 hover:bg-slate-100/80 rounded-lg transition-all active:scale-95 text-slate-500 hover:text-primary disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                                                 >
                                                     <ChevronRight className="w-5 h-5" />
                                                 </button>
@@ -1034,11 +1301,19 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                                 key={`${selectedFileId}-p${pdfPage}`}
                                                 src={`${API_BASE_URL}/api/v1/preview/pdf-page?file_path=${encodeURIComponent(selectedFile.path)}&page_num=${pdfPage}`}
                                                 alt={`PDF Page ${pdfPage + 1}`}
+                                                crossOrigin="anonymous"
+                                                referrerPolicy="no-referrer"
                                                 className="block w-full h-auto object-contain pointer-events-none"
                                                 onLoad={(e) => setImageDimensions({
                                                     width: e.currentTarget.naturalWidth,
                                                     height: e.currentTarget.naturalHeight
                                                 })}
+                                                onError={(e) => {
+                                                    if (pdfPage > 0) {
+                                                        toast.error('已经是最后一页了！');
+                                                        setPdfPage(p => p - 1);
+                                                    }
+                                                }}
                                             />
                                             {activeBbox && activeBbox.page === pdfPage && imageDimensions.width > 0 && (
                                                 <div
@@ -1065,6 +1340,12 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                                 </div>
                                             </div>
                                             <pre className="whitespace-pre-wrap font-sans text-slate-700 text-sm leading-[1.8] tracking-wide">
+                                                {textContent?.length && textContent.length > 500000 && (
+                                                    <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-xs flex items-center gap-2">
+                                                        <AlertCircle className="w-4 h-4" />
+                                                        <span>⚠️ 当前文档体积较大 ({Math.round(textContent.length / 1024)} KB)，为保证系统性能，已关闭全文动态高亮效果。</span>
+                                                    </div>
+                                                )}
                                                 {textContent ? highlightText(textContent, searchTerm) : '正在读取文本内容...'}
                                             </pre>
                                         </div>
@@ -1074,6 +1355,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                         src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(selectedFileUrl)}`}
                                         className="flex-1 w-full border-0 bg-white"
                                         title={selectedFile.name}
+                                        referrerPolicy="no-referrer"
                                     />
                                 ) : (
                                     <div className="flex-1 flex flex-col items-center justify-center text-slate-400 bg-slate-50/50">
@@ -1113,11 +1395,11 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                     </button>
                                     <button
                                         onClick={handleExportCsv}
-                                        disabled={promptFields.length === 0}
+                                        disabled={promptFields.length === 0 || isExportingCsv}
                                         className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors disabled:opacity-30"
-                                        title="导出 CSV"
+                                        title={checkedFileIds.size > 0 ? `导出选中 ${checkedFileIds.size} 个文件的 CSV` : '导出全部文件的 CSV'}
                                     >
-                                        <FileText className="w-4 h-4" />
+                                        {isExportingCsv ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                                     </button>
                                 </div>
                             </div>
@@ -1131,7 +1413,7 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                             className="flex-1 text-sm border border-slate-200 rounded-lg px-3 py-1.5 bg-white text-slate-700 focus:outline-none focus:ring-2 focus:ring-primary/20 font-semibold"
                                         >
                                             {promptSets.map(ps => (
-                                                <option key={ps.id} value={ps.id}>{ps.name}{ps.is_default ? ' ★' : ''}</option>
+                                                <option key={ps.id} value={ps.id}>{ps.name} (v{ps.version || 1}){ps.is_default ? ' ★' : ''}</option>
                                             ))}
                                         </select>
                                         <button
@@ -1246,6 +1528,14 @@ export default function TaskDetails({ params }: { params: Promise<{ id: string }
                                         }}
                                         placeholder={`提取结果将在此展示...`}
                                         rows={2}
+                                        onFocus={(e) => {
+                                            focusValueRef.current = e.target.value;
+                                        }}
+                                        onBlur={(e) => {
+                                            if (focusValueRef.current !== e.target.value) {
+                                                handleSaveManualEdit(field.id, e.target.value);
+                                            }
+                                        }}
                                         className="w-full text-sm bg-white border border-slate-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-primary/20 text-slate-700 placeholder:text-slate-300 transition-all cursor-text"
                                     />
 

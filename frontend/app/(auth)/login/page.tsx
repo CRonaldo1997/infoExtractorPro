@@ -58,13 +58,11 @@ export default function Login() {
     <div className="relative flex min-h-screen flex-col items-center justify-center p-4 bg-background-light">
       <div className="w-full space-y-8 bg-white rounded-xl shadow-sm border border-slate-200 max-w-[520px] p-10">
         <header className="flex flex-col items-center text-center space-y-4">
-          <div className="flex items-center justify-center rounded-xl bg-primary/10 text-primary w-16 h-16">
-            <Shield className="w-10 h-10" />
-          </div>
+          <img src="/logo.png" alt="Company Logo" className="h-24 w-auto object-contain" />
           <div className="space-y-1">
-            <div className="text-primary font-black text-xs uppercase tracking-[0.2em] mb-1">智能信息提取系统</div>
-            <h1 className="font-black tracking-tight text-slate-900 text-4xl">欢迎回来</h1>
-            <p className="text-slate-500 text-sm">请输入您的凭据以访问系统</p>
+            <h1 className="font-black tracking-tight text-slate-800 text-3xl">智能信息提取系统</h1>
+            <p className="text-slate-600 text-lg font-bold">欢迎回来</p>
+            <p className="text-slate-400 text-xs mt-1">请输入您的凭据以访问系统</p>
           </div>
         </header>
 

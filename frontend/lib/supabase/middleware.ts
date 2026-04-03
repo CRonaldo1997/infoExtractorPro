@@ -15,15 +15,22 @@ export async function updateSession(request: NextRequest) {
                     return request.cookies.getAll();
                 },
                 setAll(cookiesToSet) {
-                    cookiesToSet.forEach(({ name, value }) =>
-                        request.cookies.set(name, value)
-                    );
-                    supabaseResponse = NextResponse.next({
-                        request,
-                    });
-                    cookiesToSet.forEach(({ name, value, options }) =>
-                        supabaseResponse.cookies.set(name, value, options)
-                    );
+                    try {
+                        cookiesToSet.forEach(({ name, value }) =>
+                            request.cookies.set(name, value)
+                        );
+                        supabaseResponse = NextResponse.next({
+                            request,
+                        });
+                        cookiesToSet.forEach(({ name, value, options }) =>
+                            supabaseResponse.cookies.set(name, value, options)
+                        );
+                    } catch {
+                        // Cookie values with non-ASCII characters (e.g. Chinese username in
+                        // user_metadata) cannot be represented as ByteString. This is safe to
+                        // ignore – the session token itself is base64url-encoded and will be
+                        // handled correctly on the next request.
+                    }
                 },
             },
         }

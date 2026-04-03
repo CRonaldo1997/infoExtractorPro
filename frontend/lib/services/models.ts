@@ -3,9 +3,11 @@ import { createClient } from '@/lib/supabase/client';
 export interface ModelConfig {
     id: string;
     user_id: string;
-    name: string;
-    url: string;
-    api_key: string;
+    name: string;        // 显示名称
+    model_id: string;    // 实际模型标识 (如 gpt-4o, qwen2.5:7b)
+    provider: string;    // openai | ollama | deepseek | gemini
+    url: string;         // API Endpoint
+    api_key: string;     // API Key
     temperature: number;
     top_p: number;
     is_active: boolean;
@@ -47,6 +49,31 @@ export const modelService = {
         const { data, error } = await supabase
             .from('model_configs')
             .insert([{ ...model, user_id: user.id }])
+            .select()
+            .single();
+
+        if (error) throw error;
+        return data as ModelConfig;
+    },
+
+    // 更新模型配置
+    async updateModel(id: string, updates: Partial<Omit<ModelConfig, 'id' | 'created_at' | 'updated_at' | 'user_id'>>) {
+        const supabase = createClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('User not authenticated');
+
+        // 如果更新的模型设为生效，先将其他模型设为不生效
+        if (updates.is_active) {
+            await supabase
+                .from('model_configs')
+                .update({ is_active: false })
+                .eq('user_id', user.id);
+        }
+
+        const { data, error } = await supabase
+            .from('model_configs')
+            .update({ ...updates, updated_at: new Date().toISOString() })
+            .eq('id', id)
             .select()
             .single();
 

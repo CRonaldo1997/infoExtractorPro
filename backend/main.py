@@ -7,6 +7,7 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any
+import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,10 +33,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# 从环境变量加载允许的来源列表，生产环境必备
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=True,  # 生产环境通常需要跨域 Cookie 或 Auth Header
     allow_methods=["*"],
     allow_headers=["*"],
 )

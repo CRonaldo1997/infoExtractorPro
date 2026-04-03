@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 async def download_file_bytes(signed_url: str) -> bytes:
     """下载 Supabase Storage 中的文件内容"""
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=300.0) as client:
         resp = await client.get(signed_url)
         resp.raise_for_status()
         return resp.content
@@ -25,11 +25,16 @@ async def extract_text_from_file(
     mime_type: Optional[str] = None,
 ) -> str:
     """
-    从文件内容中提取纯文本
-    - txt：直接 decode
-    - docx：使用 python-docx
-    - pdf/图片：暂时返回空（后续接 OCR）
+    从文件内容中提取纯文本 (异步非阻塞包装)
     """
+    import asyncio
+    return await asyncio.to_thread(_extract_text_from_file_sync, file_bytes, file_name, mime_type)
+
+def _extract_text_from_file_sync(
+    file_bytes: bytes,
+    file_name: str,
+    mime_type: Optional[str] = None,
+) -> str:
     name_lower = file_name.lower()
 
     if name_lower.endswith(".txt") or (mime_type and "text/plain" in mime_type):
@@ -43,8 +48,25 @@ async def extract_text_from_file(
     if name_lower.endswith(".docx"):
         try:
             import docx  # python-docx
+            import io
             doc = docx.Document(io.BytesIO(file_bytes))
-            return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            
+            full_text_parts = []
+            
+            # 1. 提取所有段落
+            for p in doc.paragraphs:
+                if p.text.strip():
+                    full_text_parts.append(p.text)
+            
+            # 2. 提取所有表格内容
+            for table in doc.tables:
+                for row in table.rows:
+                    # 将行内单元格合并，模拟表格布局
+                    row_content = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if row_content:
+                        full_text_parts.append(" | ".join(row_content))
+            
+            return "\n".join(full_text_parts)
         except ImportError:
             logger.warning("python-docx not installed, cannot extract docx text")
             return ""
@@ -56,6 +78,7 @@ async def extract_text_from_file(
     if name_lower.endswith(".pdf") or (mime_type and "pdf" in mime_type):
         try:
             import fitz  # PyMuPDF
+            import io
             doc = fitz.open(stream=io.BytesIO(file_bytes), filetype="pdf")
             text_parts = []
             for page_num in range(doc.page_count):
@@ -75,6 +98,7 @@ async def extract_text_from_file(
     if any(name_lower.endswith(ext) for ext in [".jpg", ".jpeg", ".png", ".bmp", ".tiff"]):
         try:
             import fitz  # PyMuPDF
+            import io
             # 尝试使用PyMuPDF从图片中提取文本
             doc = fitz.open(stream=io.BytesIO(file_bytes), filetype=name_lower.split('.')[-1])
             text_parts = []

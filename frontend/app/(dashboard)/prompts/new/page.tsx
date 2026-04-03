@@ -5,7 +5,7 @@ import { FileUp, Trash2, Plus, ArrowLeft, Loader2, Save, Settings2 } from 'lucid
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { promptService, PromptField } from '@/lib/services/prompts';
+import { promptService, PromptField, DEFAULT_SYSTEM_PROMPT } from '@/lib/services/prompts';
 import Link from 'next/link';
 
 import * as XLSX from 'xlsx';
@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx';
 export default function NewPromptSet() {
   const router = useRouter();
   const [name, setName] = useState('');
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [chunkSize, setChunkSize] = useState(2000);
   const [chunkOverlap, setChunkOverlap] = useState(200);
   const [separators, setSeparators] = useState<string[]>(["\\n\\n", "\\n", "。", ".", " ", ""]);
@@ -162,6 +163,7 @@ export default function NewPromptSet() {
     try {
       // 1. 创建 Prompt Set (带分段配置)
       const newSet = await promptService.createPromptSet(name.trim(), false, {
+        system_prompt: systemPrompt,
         chunk_size: chunkSize,
         chunk_overlap: chunkOverlap,
         separators: separators
@@ -248,11 +250,31 @@ export default function NewPromptSet() {
                     }`}
                 >
                   <Settings2 className="w-4 h-4" />
-                  {isAdvanced ? '收起高级分段设置' : '配置分段分隔符 (Advanced)'}
+                  {isAdvanced ? '收起高级分段设置' : '配置系统提示词与分段符 (Advanced)'}
                 </button>
-
                 {isAdvanced && (
-                  <div className="mt-4 space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                  <div className="mt-6 space-y-4 animate-in fade-in slide-in-from-top-2 duration-300 border-t border-slate-50 pt-4 text-left">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-black text-slate-400 uppercase tracking-widest">系统提示词 (SYSTEM PROMPT)</label>
+                        <button 
+                          type="button"
+                          onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+                          className="text-[10px] font-bold text-primary hover:underline"
+                        >
+                          重置为默认
+                        </button>
+                      </div>
+                      <textarea
+                        value={systemPrompt}
+                        onChange={e => setSystemPrompt(e.target.value)}
+                        rows={6}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-xs font-mono outline-none focus:border-primary leading-relaxed"
+                        placeholder="请输入该词组的全局系统提示词..."
+                      />
+                    </div>
+
+                     <div className="mt-4 space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
                     <label className="text-xs font-black text-slate-400 uppercase tracking-widest">分割符 (JSON 数组格式)</label>
                     <textarea
                       value={JSON.stringify(separators)}
@@ -272,10 +294,11 @@ export default function NewPromptSet() {
                       提示: 按照优先级排列。例如 `["\n\n", "\n"]` 会优先寻找段落，其次是换行。
                     </p>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
-          </section>
+          </div>
+        </section>
 
           <section className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 space-y-6 flex flex-col">
             <div className="flex items-center justify-between">

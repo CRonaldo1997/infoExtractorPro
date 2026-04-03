@@ -1,0 +1,19 @@
+Looking in indexes: https://mirrors.aliyun.com/pypi/simple/
+Collecting ollama
+  Downloading https://mirrors.aliyun.com/pypi/packages/47/4f/4a617ee93d8208d2bcf26b2d8b9402ceaed03e3853c754940e2290fed063/ollama-0.6.1-py3-none-any.whl (14 kB)
+Requirement already satisfied: json-repair in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (0.52.2)
+Requirement already satisfied: httpx>=0.27 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from ollama) (0.28.1)
+Requirement already satisfied: pydantic>=2.9 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from ollama) (2.11.10)
+Requirement already satisfied: anyio in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from httpx>=0.27->ollama) (4.11.0)
+Requirement already satisfied: certifi in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from httpx>=0.27->ollama) (2025.10.5)
+Requirement already satisfied: httpcore==1.* in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from httpx>=0.27->ollama) (1.0.9)
+Requirement already satisfied: idna in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from httpx>=0.27->ollama) (3.11)
+Requirement already satisfied: h11>=0.16 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from httpcore==1.*->httpx>=0.27->ollama) (0.16.0)
+Requirement already satisfied: annotated-types>=0.6.0 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from pydantic>=2.9->ollama) (0.7.0)
+Requirement already satisfied: pydantic-core==2.33.2 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from pydantic>=2.9->ollama) (2.33.2)
+Requirement already satisfied: typing-extensions>=4.12.2 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from pydantic>=2.9->ollama) (4.15.0)
+Requirement already satisfied: typing-inspection>=0.4.0 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from pydantic>=2.9->ollama) (0.4.2)
+Requirement already satisfied: sniffio>=1.1 in /home/dong/miniconda3/envs/py311/lib/python3.11/site-packages (from anyio->httpx>=0.27->ollama) (1.3.1)
+Installing collected packages: ollama
+Successfully installed ollama-0.6.1
+

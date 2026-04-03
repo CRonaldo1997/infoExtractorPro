@@ -10,7 +10,7 @@ class Settings:
     SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
     # PaddleOCR-VL 1.5
-    PADDLEOCR_TOKEN: str = os.getenv("PADDLEOCR_TOKEN", "cf4a0b67edaf87887f0f5c1c81e4f5c89e9a4481")
+    PADDLEOCR_TOKEN: str = os.getenv("PADDLEOCR_TOKEN", "")
     PADDLEOCR_JOB_URL: str = os.getenv("PADDLEOCR_JOB_URL", "https://www.paddleocr.com/api/v1/ocr")
     PADDLEOCR_MODEL: str = os.getenv("PADDLEOCR_MODEL", "PaddleOCR-VL-1.5")
     
@@ -22,6 +22,8 @@ class Settings:
             raise ValueError("SUPABASE_URL is not set")
         if not self.SUPABASE_SERVICE_ROLE_KEY:
             raise ValueError("SUPABASE_SERVICE_ROLE_KEY is not set")
+        if not self.PADDLEOCR_TOKEN:
+            raise ValueError("PADDLEOCR_TOKEN is not set")
 
 
 settings = Settings()

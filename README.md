@@ -33,6 +33,9 @@
 - **LLM**: OpenAI 兼容协议接口 (可适配 GPT-4, GLM-4, Claude 等)
 - **Concurrency**: Asyncio (高并发异步处理)
 
+### OLLAMA启动本地模型
+OLLAMA_NUM_CTX=10000 ollama serve
+
 ---
 
 ## 🚀 快速开始
